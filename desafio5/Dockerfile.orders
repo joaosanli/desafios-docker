@@ -1,0 +1,95 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir flask
+
+RUN cat > orders.py << 'EOF'
+from flask import Flask, jsonify
+from datetime import datetime, timedelta
+
+app = Flask(__name__)
+
+ORDERS = [
+    {
+        'id': 1,
+        'user_id': 1,
+        'product': 'Laptop',
+        'amount': 1500.00,
+        'status': 'delivered',
+        'date': (datetime.utcnow() - timedelta(days=25)).isoformat()
+    },
+    {
+        'id': 2,
+        'user_id': 1,
+        'product': 'Mouse',
+        'amount': 50.00,
+        'status': 'delivered',
+        'date': (datetime.utcnow() - timedelta(days=20)).isoformat()
+    },
+    {
+        'id': 3,
+        'user_id': 2,
+        'product': 'Keyboard',
+        'amount': 150.00,
+        'status': 'processing',
+        'date': (datetime.utcnow() - timedelta(days=5)).isoformat()
+    },
+    {
+        'id': 4,
+        'user_id': 2,
+        'product': 'Monitor',
+        'amount': 800.00,
+        'status': 'pending',
+        'date': (datetime.utcnow() - timedelta(days=2)).isoformat()
+    },
+    {
+        'id': 5,
+        'user_id': 3,
+        'product': 'Webcam',
+        'amount': 120.00,
+        'status': 'cancelled',
+        'date': (datetime.utcnow() - timedelta(days=8)).isoformat()
+    }
+]
+
+
+@app.route('/')
+def index():
+    return jsonify({'service': 'orders'})
+
+
+@app.route('/health')
+def health():
+    return jsonify({'ok': True})
+
+
+@app.route('/orders')
+def list_orders():
+    return jsonify({'orders': ORDERS, 'count': len(ORDERS)})
+
+
+@app.route('/orders/<int:oid>')
+def get_order(oid):
+    order = next((o for o in ORDERS if o['id'] == oid), None)
+    return jsonify(order) if order else ({'error': 'not found'}, 404)
+
+
+@app.route('/user/<int:uid>/orders')
+def user_orders(uid):
+    user_orders = [o for o in ORDERS if o['user_id'] == uid]
+    return jsonify({
+        'user_id': uid,
+        'orders': user_orders,
+        'count': len(user_orders),
+        'total': sum(o['amount'] for o in user_orders)
+    })
+
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5004)
+EOF
+
+EXPOSE 5004
+
+CMD ["python", "orders.py"]

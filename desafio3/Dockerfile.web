@@ -1,0 +1,103 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir flask redis psycopg2-binary
+
+RUN cat > app.py << 'EOF'
+import os
+import redis
+import psycopg2
+from flask import Flask, jsonify
+
+app = Flask(__name__)
+
+# Config from env
+PG_HOST = os.getenv('PG_HOST', 'db')
+PG_PORT = os.getenv('PG_PORT', '5432')
+PG_DB = os.getenv('PG_DB', 'appdb')
+PG_USER = os.getenv('PG_USER', 'postgres')
+PG_PASS = os.getenv('PG_PASS', 'postgres')
+
+REDIS_HOST = os.getenv('REDIS_HOST', 'cache')
+REDIS_PORT = int(os.getenv('REDIS_PORT', '6379'))
+
+
+def pg_connect():
+    try:
+        return psycopg2.connect(
+            host=PG_HOST,
+            port=PG_PORT,
+            database=PG_DB,
+            user=PG_USER,
+            password=PG_PASS
+        )
+    except Exception:
+        return None
+
+
+def redis_connect():
+    try:
+        r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
+        r.ping()
+        return r
+    except Exception:
+        return None
+
+
+@app.route('/')
+def index():
+    return jsonify({'ok': True, 'service': 'web'})
+
+
+@app.route('/health')
+def health():
+    pg_ok = 'ok' if pg_connect() else 'down'
+    redis_ok = 'ok' if redis_connect() else 'down'
+    
+    return jsonify({
+        'healthy': pg_ok == 'ok' and redis_ok == 'ok',
+        'db': pg_ok,
+        'cache': redis_ok
+    })
+
+
+@app.route('/data')
+def get_data():
+    r = redis_connect()
+    
+    if r:
+        cached = r.get('app_data')
+        if cached:
+            return jsonify({'data': cached, 'source': 'cache'})
+    
+    conn = pg_connect()
+    if conn:
+        cur = conn.cursor()
+        cur.execute('SELECT version()')
+        version = cur.fetchone()[0]
+        conn.close()
+        
+        if r:
+            r.set('app_data', version, ex=60)
+        
+        return jsonify({'data': version, 'source': 'db'})
+    
+    return jsonify({'error': 'No connection'}), 503
+
+
+@app.route('/config')
+def config():
+    return jsonify({
+        'postgres': {'host': PG_HOST, 'port': PG_PORT, 'db': PG_DB},
+        'redis': {'host': REDIS_HOST, 'port': REDIS_PORT}
+    })
+
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
+EOF
+
+EXPOSE 5000
+
+CMD ["python", "app.py"]

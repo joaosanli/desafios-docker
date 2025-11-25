@@ -1,0 +1,139 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir flask requests
+
+RUN cat > gateway.py << 'EOF'
+import os
+import requests
+from flask import Flask, jsonify
+
+app = Flask(__name__)
+
+USERS_URL = os.getenv('USERS_URL', 'http://users:5003')
+ORDERS_URL = os.getenv('ORDERS_URL', 'http://orders:5004')
+
+
+def call(url, timeout=5):
+    try:
+        r = requests.get(url, timeout=timeout)
+        r.raise_for_status()
+        return r.json(), 200
+    except requests.Timeout:
+        return {'error': 'timeout'}, 504
+    except requests.ConnectionError:
+        return {'error': 'unreachable'}, 503
+    except Exception as e:
+        return {'error': str(e)}, 500
+
+
+@app.route('/')
+def index():
+    return jsonify({
+        'gateway': True,
+        'endpoints': {
+            'users': '/users',
+            'orders': '/orders',
+            'user_orders': '/user/<id>/orders',
+            'dashboard': '/dashboard'
+        }
+    })
+
+
+@app.route('/health')
+def health():
+    u_ok = u_down = o_ok = o_down = False
+    
+    try:
+        requests.get(f'{USERS_URL}/health', timeout=3)
+        u_ok = True
+    except:
+        u_down = True
+    
+    try:
+        requests.get(f'{ORDERS_URL}/health', timeout=3)
+        o_ok = True
+    except:
+        o_down = True
+    
+    return jsonify({
+        'ok': u_ok and o_ok,
+        'users': 'ok' if u_ok else 'down',
+        'orders': 'ok' if o_ok else 'down'
+    })
+
+
+@app.route('/users')
+def list_users():
+    data, code = call(f'{USERS_URL}/users')
+    return jsonify(data), code
+
+
+@app.route('/users/<int:uid>')
+def get_user(uid):
+    data, code = call(f'{USERS_URL}/users/{uid}')
+    return jsonify(data), code
+
+
+@app.route('/orders')
+def list_orders():
+    data, code = call(f'{ORDERS_URL}/orders')
+    return jsonify(data), code
+
+
+@app.route('/orders/<int:oid>')
+def get_order(oid):
+    data, code = call(f'{ORDERS_URL}/orders/{oid}')
+    return jsonify(data), code
+
+
+@app.route('/user/<int:uid>/orders')
+def user_orders(uid):
+    data, code = call(f'{ORDERS_URL}/user/{uid}/orders')
+    return jsonify(data), code
+
+
+@app.route('/user/<int:uid>/profile')
+def user_profile(uid):
+    user_data, u_code = call(f'{USERS_URL}/users/{uid}')
+    
+    if u_code != 200:
+        return jsonify({'error': 'user not found'}), 404
+    
+    orders_data, o_code = call(f'{ORDERS_URL}/user/{uid}/orders')
+    
+    return jsonify({
+        'user': user_data,
+        'orders': orders_data.get('orders', []) if o_code == 200 else [],
+        'order_count': len(orders_data.get('orders', [])) if o_code == 200 else 0
+    })
+
+
+@app.route('/dashboard')
+def dashboard():
+    u_data, u_code = call(f'{USERS_URL}/users')
+    o_data, o_code = call(f'{ORDERS_URL}/orders')
+    
+    users = u_data.get('users', []) if u_code == 200 else []
+    orders = o_data.get('orders', []) if o_code == 200 else []
+    
+    return jsonify({
+        'users': len(users),
+        'active': sum(1 for u in users if u.get('status') == 'active'),
+        'orders': len(orders),
+        'total_value': sum(o.get('amount', 0) for o in orders),
+        'services': {
+            'users': 'ok' if u_code == 200 else 'down',
+            'orders': 'ok' if o_code == 200 else 'down'
+        }
+    })
+
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
+EOF
+
+EXPOSE 5000
+
+CMD ["python", "gateway.py"]

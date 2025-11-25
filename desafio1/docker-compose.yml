@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  web-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    container_name: web-server
+    ports:
+      - "8080:8080"
+    networks:
+      - local
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  client:
+    build:
+      context: .
+      dockerfile: Dockerfile.client
+    container_name: http-client
+    networks:
+      - local
+    depends_on:
+      - web-server
+
+networks:
+  local:
+    driver: bridge

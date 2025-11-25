@@ -1,0 +1,33 @@
+FROM alpine:latest
+
+WORKDIR /app
+
+RUN apk add --no-cache curl
+
+RUN cat > client.sh << 'EOF'
+#!/bin/sh
+
+TARGET="http://web-server:8080"
+
+echo "Starting client, will ping $TARGET every 5 seconds"
+echo "=================================================="
+
+while true; do
+    echo ""
+    echo "[$(date '+%H:%M:%S')] Calling $TARGET"
+    
+    curl -s "$TARGET/" 2>/dev/null | head -c 80
+    echo ""
+    
+    echo "[$(date '+%H:%M:%S')] Health check..."
+    curl -s "$TARGET/health" 2>/dev/null | head -c 80
+    echo ""
+    
+    echo "=================================================="
+    sleep 5
+done
+EOF
+
+RUN chmod +x client.sh
+
+CMD ["./client.sh"]

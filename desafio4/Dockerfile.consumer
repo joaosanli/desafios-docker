@@ -1,0 +1,89 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir flask requests
+
+RUN cat > consumer.py << 'EOF'
+from flask import Flask, jsonify
+from datetime import datetime
+import requests
+import os
+
+app = Flask(__name__)
+
+USERS_URL = os.getenv('USERS_URL', 'http://users:5001')
+
+
+def fetch_users():
+    try:
+        resp = requests.get(f'{USERS_URL}/users', timeout=5)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        return {'error': str(e), 'users': []}
+
+
+@app.route('/')
+def index():
+    return jsonify({'service': 'consumer', 'version': '1.0'})
+
+
+@app.route('/health')
+def health():
+    try:
+        requests.get(f'{USERS_URL}/health', timeout=3)
+        users_ok = True
+    except:
+        users_ok = False
+    
+    return jsonify({'ok': True, 'users_service': 'ok' if users_ok else 'down'})
+
+
+@app.route('/users-enriched')
+def enriched():
+    data = fetch_users()
+    
+    if 'error' in data:
+        return jsonify({'error': 'Cannot reach users service'}), 503
+    
+    users = data.get('users', [])
+    enriched_list = []
+    
+    for u in users:
+        joined = datetime.fromisoformat(u['joined'])
+        days = (datetime.utcnow() - joined).days
+        
+        enriched_list.append({
+            **u,
+            'days_active': days,
+            'veteran': days > 15
+        })
+    
+    return jsonify({'users': enriched_list, 'total': len(enriched_list)})
+
+
+@app.route('/summary')
+def summary():
+    data = fetch_users()
+    
+    if 'error' in data:
+        return jsonify({'error': 'Service unavailable'}), 503
+    
+    users = data.get('users', [])
+    
+    return jsonify({
+        'total': len(users),
+        'active': sum(1 for u in users if u['status'] == 'active'),
+        'inactive': sum(1 for u in users if u['status'] == 'inactive'),
+        'list': [{'id': u['id'], 'name': u['name'], 'status': u['status']} for u in users]
+    })
+
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5002)
+EOF
+
+EXPOSE 5002
+
+CMD ["python", "consumer.py"]
